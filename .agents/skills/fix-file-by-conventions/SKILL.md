@@ -8,7 +8,12 @@ Fix convention violations in a file using the report produced by `/review-file`.
 
 ## Steps
 
-1. Parse `$ARGUMENTS` to get the file path. Accept paths under `lab/tasks/` (e.g., `lab/tasks/setup.md`, `lab/tasks/required/task-2.md`) or `wiki/` (e.g., `wiki/web-development.md`). If the path is missing or does not point to a file under one of these directories, ask the user.
+1. Parse `$ARGUMENTS` to get the file path. Accept:
+   - Paths under `lab/tasks/` (e.g., `lab/tasks/setup.md`, `lab/tasks/required/task-2.md`)
+   - Paths under `wiki/` (e.g., `wiki/web-development.md`)
+   - Paths under `contributing/conventions/` (e.g., `contributing/conventions/writing/common.md`)
+   - The repository root `AGENTS.md` file
+   If the path is missing or does not match one of these patterns, ask the user.
 2. Derive the report path: `instructors/file-reviews/<repo-root-path>`, where `<repo-root-path>` is the target file's path from the repository root (e.g., `instructors/file-reviews/lab/tasks/required/task-1.md` for `lab/tasks/required/task-1.md`, `instructors/file-reviews/wiki/web-development.md` for `wiki/web-development.md`). If the report file does not exist, tell the user to run `/review-file <path>` first and stop.
 3. Read the report file.
 4. Read the target file.
@@ -19,6 +24,10 @@ Fix convention violations in a file using the report produced by `/review-file`.
    - **For `wiki/` files:**
      - [`contributing/conventions/writing/common.md`](../../../contributing/conventions/writing/common.md)
      - [`contributing/conventions/writing/wiki.md`](../../../contributing/conventions/writing/wiki.md)
+   - **For `contributing/conventions/` files:**
+     - [`contributing/conventions/conventions.md`](../../../contributing/conventions/conventions.md)
+   - **For `AGENTS.md`:**
+     - [`contributing/conventions/agents/agents.md`](../../../contributing/conventions/agents/agents.md)
 6. **Conceptual findings** cannot be auto-fixed — they require content decisions that only the author can make. List them all as skipped in the summary.
 7. Work through the report **Convention findings** one group at a time. For each violation, apply the minimal edit that resolves it. Use line numbers from the report as a starting guide, but always verify against the current file content (earlier fixes may shift lines).
 8. Work through the report **Empty sections**. For each empty section that has no `<!-- TODO ... -->` marker, add `<!-- TODO fill in this section -->` directly below the heading. Empty sections that already contain a `<!-- TODO ... -->` cannot be auto-fixed — skip them and note them in the summary.
