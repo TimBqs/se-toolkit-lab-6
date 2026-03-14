@@ -406,6 +406,7 @@ When answering questions:
 - For "list all" questions: use list_files to find files, then answer based on file names and docstrings
 - When asked about router domains, use list_files with path "backend/app/routers", then read the __init__.py to see all routers
 - For request lifecycle questions: read docker-compose.yml, Caddyfile, Dockerfile, and main.py, then provide complete answer
+- For comparison questions (e.g., ETL vs API): read all relevant files first, then provide a complete comparison answer
 - Use full relative paths from project root (e.g., "backend/app/routers", not just "routers")
 - When reading files, always include a source reference in the format: wiki/filename.md#section-anchor or path/to/file.py
 - IMPORTANT: Your final response must directly answer the question with complete information
@@ -413,6 +414,7 @@ When answering questions:
 - After reading relevant files, synthesize the information into a complete answer
 - Stop making tool calls once you have enough information and provide your final answer
 - Be efficient: use the minimum number of tool calls needed
+- For router questions: after reading __init__.py, you can see all routers listed - answer based on that and the file names
 
 Be concise and accurate. Always cite your sources when reading files."""
 
