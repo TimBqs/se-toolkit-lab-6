@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-LLM Agent CLI - Task 2: Documentation Agent
+LLM Agent CLI - Task 3: System Agent
 
-An agent that uses tools (read_file, list_files) to navigate the project wiki
-and answer questions with proper source references.
+An agent that uses tools (read_file, list_files, query_api) to navigate the project wiki,
+read source code, and query the backend API to answer questions.
 
 Usage:
     uv run agent.py "Your question here"
@@ -26,7 +26,7 @@ import httpx
 from dotenv import load_dotenv
 
 # Maximum tool calls per question
-MAX_TOOL_CALLS = 10
+MAX_TOOL_CALLS = 15
 
 # Project root directory (parent of agent.py)
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -140,6 +140,61 @@ def tool_list_files(path: str) -> str:
         return f"Error listing directory: {e}"
 
 
+def tool_query_api(method: str, path: str, body: str | None = None, include_auth: bool = True) -> str:
+    """
+    Query the backend API with optional authentication.
+
+    Args:
+        method: HTTP method (GET, POST, PUT, DELETE, etc.)
+        path: API path (e.g., '/items/', '/analytics/completion-rate')
+        body: Optional JSON request body for POST/PUT requests
+        include_auth: Whether to include LMS_API_KEY in Authorization header (default: True)
+
+    Returns:
+        JSON string with status_code and body, or error message
+    """
+    base_url = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
+    api_key = os.getenv("LMS_API_KEY")
+
+    url = f"{base_url}{path}"
+    headers = {}
+    
+    if include_auth:
+        if not api_key:
+            return "Error: LMS_API_KEY not set in environment"
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    print(f"Querying API: {method} {url}", file=sys.stderr)
+
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            if method.upper() == "GET":
+                response = client.get(url, headers=headers)
+            elif method.upper() == "POST":
+                response = client.post(url, headers=headers, json=json.loads(body) if body else {})
+            elif method.upper() == "PUT":
+                response = client.put(url, headers=headers, json=json.loads(body) if body else {})
+            elif method.upper() == "DELETE":
+                response = client.delete(url, headers=headers)
+            else:
+                return f"Error: Unsupported HTTP method: {method}"
+
+            result = {
+                "status_code": response.status_code,
+                "body": response.json() if response.content else None,
+            }
+            return json.dumps(result)
+
+    except httpx.TimeoutException:
+        return "Error: API request timed out"
+    except httpx.HTTPError as e:
+        return f"Error: HTTP error: {e}"
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid JSON in request body: {e}"
+    except Exception as e:
+        return f"Error querying API: {e}"
+
+
 # Tool definitions for LLM function calling
 TOOLS = [
     {
@@ -163,16 +218,45 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_files",
-            "description": "List files and directories in a directory",
+            "description": "List files and directories in a directory. Use relative paths from project root (e.g., 'wiki', 'backend/app/routers').",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative directory path from project root (e.g., 'wiki')",
+                        "description": "Relative directory path from project root (e.g., 'wiki', 'backend/app/routers')",
                     }
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_api",
+            "description": "Send an HTTP request to the backend API. Use for data-dependent questions like item counts, analytics, status codes, or testing endpoint behavior. Set include_auth=false to test authentication errors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method (GET, POST, PUT, DELETE, etc.)"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "API path (e.g., '/items/', '/analytics/completion-rate')"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional JSON request body for POST/PUT requests"
+                    },
+                    "include_auth": {
+                        "type": "boolean",
+                        "description": "Whether to include API key in Authorization header (default: true). Set to false to test authentication errors."
+                    }
+                },
+                "required": ["method", "path"]
             },
         },
     },
@@ -182,6 +266,7 @@ TOOLS = [
 TOOL_FUNCTIONS = {
     "read_file": tool_read_file,
     "list_files": tool_list_files,
+    "query_api": tool_query_api,
 }
 
 
@@ -279,6 +364,20 @@ def extract_source_from_messages(messages: list[dict]) -> str:
                     except (json.JSONDecodeError, KeyError):
                         pass
 
+    # If query_api was used, indicate API as source
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            tool_calls = msg.get("tool_calls", [])
+            for tc in tool_calls:
+                if tc.get("function", {}).get("name") == "query_api":
+                    try:
+                        args = json.loads(tc["function"]["arguments"])
+                        path = args.get("path", "")
+                        if path:
+                            return f"API: {path}"
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
     return "wiki"  # Default source
 
 
@@ -294,16 +393,28 @@ def run_agentic_loop(question: str, config: dict) -> dict:
         Result dict with answer, source, and tool_calls
     """
     # System prompt instructs the LLM to use tools and cite sources
-    system_prompt = """You are a helpful documentation assistant. You have access to tools that can read files and list directories in a project wiki.
+    system_prompt = """You are a helpful documentation assistant. You have access to tools that can:
+1. Read files and list directories in the project wiki and source code
+2. Query the backend API for live data
 
 When answering questions:
-1. Use list_files to discover what files are available
-2. Use read_file to read relevant wiki content
-3. Base your answer on the wiki content you read
-4. Always include a source reference in the format: wiki/filename.md#section-anchor
-5. Stop calling tools once you have enough information to answer
+- For wiki/documentation questions: use list_files and read_file
+- For source code questions: use read_file to examine code  
+- For data-dependent questions (counts, scores, analytics): use query_api
+- For API behavior questions (status codes, errors): use query_api
+- For questions about authentication errors: use query_api with include_auth=false
+- For "list all" questions: use list_files to find files, then answer based on file names and docstrings
+- When asked about router domains, use list_files with path "backend/app/routers", then read the __init__.py to see all routers
+- For request lifecycle questions: read docker-compose.yml, Caddyfile, Dockerfile, and main.py, then provide complete answer
+- Use full relative paths from project root (e.g., "backend/app/routers", not just "routers")
+- When reading files, always include a source reference in the format: wiki/filename.md#section-anchor or path/to/file.py
+- IMPORTANT: Your final response must directly answer the question with complete information
+- Do not say "let me continue" or describe future actions - provide the complete answer now
+- After reading relevant files, synthesize the information into a complete answer
+- Stop making tool calls once you have enough information and provide your final answer
+- Be efficient: use the minimum number of tool calls needed
 
-Be concise and accurate. Always cite your sources."""
+Be concise and accurate. Always cite your sources when reading files."""
 
     messages = [
         {"role": "system", "content": system_prompt},

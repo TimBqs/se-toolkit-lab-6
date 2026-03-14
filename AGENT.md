@@ -2,7 +2,9 @@
 
 ## Overview
 
-This is an LLM-powered documentation agent that uses tools to navigate the project wiki and answer questions with proper source references. The agent implements an **agentic loop** - it can call tools, observe results, and decide what to do next.
+This is an LLM-powered documentation agent that uses tools to navigate the project wiki, read source code, and query the backend API to answer questions. The agent implements an **agentic loop** - it can call tools, observe results, and decide what to do next.
+
+**Task 3 Update:** Added `query_api` tool for querying the backend API with authentication support.
 
 ## LLM Provider
 
@@ -76,6 +78,7 @@ Read contents of a file from the project repository.
 **Returns:** File contents as string, or error message
 
 **Security:**
+
 - Rejects paths with `../` traversal attempts
 - Cannot read files outside project directory
 
@@ -90,18 +93,57 @@ List files and directories in a directory.
 **Returns:** Newline-separated listing, or error message
 
 **Security:**
+
 - Rejects paths that escape project root
 - Cannot list directories outside project directory
 
+### query_api (Task 3)
+
+Query the backend API with optional authentication.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `method` | string | HTTP method (GET, POST, PUT, DELETE) |
+| `path` | string | API path (e.g., `/items/`, `/analytics/completion-rate`) |
+| `body` | string (optional) | JSON request body for POST/PUT requests |
+| `include_auth` | boolean (default: true) | Whether to include LMS_API_KEY in Authorization header |
+
+**Returns:** JSON string with `status_code` and `body`, or error message
+
+**Authentication:** Uses `LMS_API_KEY` from `.env.docker.secret` when `include_auth=true`
+
+**Use cases:**
+
+- Data-dependent questions (item counts, scores, analytics)
+- Testing API behavior (status codes, error responses)
+- Debugging endpoint issues
+
+**Example:** To test authentication error, use `include_auth=false`:
+
+```json
+{"tool": "query_api", "args": {"method": "GET", "path": "/items/", "include_auth": false}}
+```
+
 ## Configuration
 
-The agent reads configuration from `.env.agent.secret` in the project root:
+The agent reads all configuration from environment variables:
+
+### LLM Configuration (`.env.agent.secret`)
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `LLM_API_KEY` | API key for authentication | `sk-...` |
-| `LLM_API_BASE` | Base URL of the LLM API | `http://192.168.1.100:42005/v1` |
+| `LLM_API_KEY` | LLM provider API key | `sk-...` |
+| `LLM_API_BASE` | Base URL of the LLM API | `http://10.93.24.145:42005/v1` |
 | `LLM_MODEL` | Model name to use | `qwen3-coder-plus` |
+
+### Backend API Configuration (`.env.docker.secret`)
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `LMS_API_KEY` | Backend API key for `query_api` authentication | `my-secret-api-key` |
+| `AGENT_API_BASE_URL` | Base URL for backend API (optional) | `http://localhost:42002` |
+
+**Note:** The autochecker injects its own credentials at runtime. Never hardcode values.
 
 ## Usage
 
@@ -152,13 +194,22 @@ The agent outputs a single JSON line to stdout:
 
 ## System Prompt
 
-The system prompt instructs the LLM to:
+The system prompt guides the LLM to:
 
-1. Use `list_files` to discover available wiki files
-2. Use `read_file` to read relevant content
-3. Base answers on wiki content read
-4. Always include a source reference
-5. Stop calling tools when enough information is gathered
+1. Use `list_files` and `read_file` for wiki/documentation questions
+2. Use `read_file` for source code questions
+3. Use `query_api` for data-dependent questions (counts, scores, analytics)
+4. Use `query_api` with `include_auth=false` for authentication error testing
+5. Include source references when reading files
+6. Provide complete answers immediately (not "let me continue")
+7. Stop making tool calls once enough information is gathered
+
+**Tool selection logic:**
+
+- Wiki questions → `list_files`, `read_file`
+- Source code questions → `read_file`
+- API data questions → `query_api`
+- Auth testing → `query_api` with `include_auth=false`
 
 ## Error Handling
 
@@ -167,6 +218,7 @@ The system prompt instructs the LLM to:
 - Exit code 0 on success, 1 on error
 
 Possible errors:
+
 - Missing command-line argument
 - Missing environment variables
 - API timeout (60 second limit)
@@ -211,7 +263,56 @@ uv run pytest tests/test_agent.py -v
 ```
 
 Tests verify:
+
 - Agent outputs valid JSON
 - `answer`, `source`, and `tool_calls` fields exist
 - Correct tools are called for specific questions
 - Tool results are properly captured
+
+## Benchmark Results (Task 3)
+
+**Best score: 8/10 passed**
+
+### Passed Questions
+
+1. ✓ Wiki: Branch protection steps
+2. ✓ Wiki: SSH connection guide
+3. ✓ Framework detection (FastAPI)
+4. ✓ Router modules listing (unstable, ~50%)
+5. ✓ Item count from database
+6. ✓ Auth error status code (401)
+7. ✓ Analytics completion-rate error
+8. ✓ Top-learners bug diagnosis
+
+### Challenges
+
+- **Question 9** (request lifecycle): LLM sometimes doesn't complete the answer
+- **Question 10** (ETL idempotency): Not reached due to Q9 failure
+- **Question 4 instability**: LLM non-determinism causes ~50% pass rate
+
+## Lessons Learned
+
+1. **Tool descriptions matter**: Adding examples like `"backend/app/routers"` in tool descriptions helps the LLM use correct paths from the first attempt.
+
+2. **Explicit instructions improve completion**: Telling the LLM "do not say 'let me continue'" reduces incomplete answers, but doesn't eliminate them entirely.
+
+3. **Flexible authentication**: The `include_auth=false` parameter enables testing authentication errors (401/403 responses) without modifying the tool implementation.
+
+4. **LLM variability**: The same prompt produces different results across runs. Stability requires careful prompt engineering and possibly multiple retry strategies.
+
+5. **Iteration limits**: Increased `MAX_TOOL_CALLS` from 10 to 15 to accommodate complex multi-step queries that require reading multiple files.
+
+6. **Source extraction**: Updated `extract_source_from_messages()` to handle both file paths (`read_file`) and API endpoints (`query_api`).
+
+7. **Environment variable separation**: Keeping `LLM_API_KEY` (for LLM provider) separate from `LMS_API_KEY` (for backend API) prevents confusion and security issues.
+
+## Files (Updated)
+
+| File | Description |
+|------|-------------|
+| `agent.py` | Main CLI script with agentic loop and `query_api` tool |
+| `.env.agent.secret` | LLM configuration (gitignored) |
+| `.env.docker.secret` | Backend API credentials (gitignored) |
+| `plans/task-3.md` | Implementation plan and benchmark diagnosis |
+| `AGENT.md` | This documentation |
+| `tests/test_agent.py` | Regression tests |
