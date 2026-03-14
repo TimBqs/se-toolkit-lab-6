@@ -2,9 +2,9 @@
 Regression tests for agent.py
 
 Tests verify that agent.py:
-1. Runs successfully with a question
-2. Outputs valid JSON
-3. Has required fields: answer (non-empty string) and tool_calls (empty list)
+1. Outputs valid JSON with required fields (answer, source, tool_calls)
+2. Uses correct tools for documentation questions
+3. Returns proper source references
 """
 
 import json
@@ -13,38 +13,134 @@ import sys
 from pathlib import Path
 
 
-def test_agent_outputs_valid_json():
-    """Test that agent.py outputs valid JSON with required fields."""
-    # Path to agent.py
-    agent_path = Path(__file__).parent.parent / "agent.py"
+def run_agent(question: str) -> tuple[int, str, str]:
+    """
+    Run agent.py with a question and return result.
 
-    # Run agent.py with a simple test question
-    # Using a simple question that should get a quick response
+    Args:
+        question: The question to ask
+
+    Returns:
+        Tuple of (returncode, stdout, stderr)
+    """
+    agent_path = Path(__file__).parent.parent / "agent.py"
     result = subprocess.run(
-        ["uv", "run", str(agent_path), "What is 2+2?"],
+        ["uv", "run", str(agent_path), question],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,  # Longer timeout for agentic loop
     )
+    return result.returncode, result.stdout.strip(), result.stderr
 
-    # Check exit code
-    assert result.returncode == 0, f"agent.py failed with: {result.stderr}"
 
-    # Parse stdout as JSON
-    stdout = result.stdout.strip()
+def parse_json_output(stdout: str) -> dict:
+    """Parse agent output as JSON."""
     assert stdout, "agent.py produced no output"
-
     try:
-        data = json.loads(stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError as e:
         raise AssertionError(f"agent.py output is not valid JSON: {e}\nOutput: {stdout}")
 
+
+def test_agent_outputs_valid_json():
+    """Test that agent.py outputs valid JSON with required fields."""
+    returncode, stdout, stderr = run_agent("What is 2+2?")
+
+    # Check exit code
+    assert returncode == 0, f"agent.py failed with: {stderr}"
+
+    # Parse and validate JSON
+    data = parse_json_output(stdout)
+
     # Check required fields
     assert "answer" in data, "Missing 'answer' field in output"
+    assert "source" in data, "Missing 'source' field in output"
     assert "tool_calls" in data, "Missing 'tool_calls' field in output"
 
-    # Validate field types and values
+    # Validate field types
     assert isinstance(data["answer"], str), "'answer' must be a string"
     assert len(data["answer"]) > 0, "'answer' must not be empty"
+    assert isinstance(data["source"], str), "'source' must be a string"
     assert isinstance(data["tool_calls"], list), "'tool_calls' must be a list"
-    assert len(data["tool_calls"]) == 0, "'tool_calls' must be empty for Task 1"
+
+
+def test_merge_conflict_uses_read_file():
+    """
+    Test that asking about merge conflicts uses read_file tool.
+
+    Expected behavior:
+    - Agent should call list_files to find wiki files
+    - Agent should call read_file to read git-workflow.md
+    - Source should reference wiki/git-workflow.md
+    """
+    returncode, stdout, stderr = run_agent("How do you resolve a merge conflict?")
+
+    # Check exit code
+    assert returncode == 0, f"agent.py failed with: {stderr}"
+
+    # Parse JSON
+    data = parse_json_output(stdout)
+
+    # Check required fields exist
+    assert "answer" in data, "Missing 'answer' field"
+    assert "source" in data, "Missing 'source' field"
+    assert "tool_calls" in data, "Missing 'tool_calls' field"
+
+    # Verify read_file was called
+    tool_names = [tc.get("tool") for tc in data["tool_calls"]]
+    assert "read_file" in tool_names, (
+        f"Expected 'read_file' in tool_calls, got: {tool_names}"
+    )
+
+    # Verify source references git-workflow.md
+    source = data["source"]
+    assert "git-workflow.md" in source, (
+        f"Expected 'git-workflow.md' in source, got: {source}"
+    )
+
+    # Verify answer is non-empty
+    assert len(data["answer"]) > 0, "'answer' must not be empty"
+
+
+def test_wiki_files_uses_list_files():
+    """
+    Test that asking about wiki files uses list_files tool.
+
+    Expected behavior:
+    - Agent should call list_files to list wiki directory
+    - Tool result should contain file names
+    """
+    returncode, stdout, stderr = run_agent("What files are in the wiki?")
+
+    # Check exit code
+    assert returncode == 0, f"agent.py failed with: {stderr}"
+
+    # Parse JSON
+    data = parse_json_output(stdout)
+
+    # Check required fields exist
+    assert "answer" in data, "Missing 'answer' field"
+    assert "source" in data, "Missing 'source' field"
+    assert "tool_calls" in data, "Missing 'tool_calls' field"
+
+    # Verify list_files was called
+    tool_names = [tc.get("tool") for tc in data["tool_calls"]]
+    assert "list_files" in tool_names, (
+        f"Expected 'list_files' in tool_calls, got: {tool_names}"
+    )
+
+    # Verify list_files result contains expected files
+    list_files_result = None
+    for tc in data["tool_calls"]:
+        if tc.get("tool") == "list_files":
+            list_files_result = tc.get("result", "")
+            break
+
+    assert list_files_result is not None, "list_files result not found"
+    # Check that result contains some expected wiki files
+    assert "git-workflow.md" in list_files_result or "wiki" in list_files_result, (
+        f"Expected wiki files in list_files result, got: {list_files_result}"
+    )
+
+    # Verify answer is non-empty
+    assert len(data["answer"]) > 0, "'answer' must not be empty"
