@@ -414,6 +414,7 @@ When answering questions:
 - After reading relevant files, synthesize the information into a complete answer
 - Stop making tool calls once you have enough information and provide your final answer
 - Be efficient: use the minimum number of tool calls needed
+- For router questions: after reading __init__.py, you can see all routers listed - answer based on that and the file names
 
 Be concise and accurate. Always cite your sources when reading files."""
 
