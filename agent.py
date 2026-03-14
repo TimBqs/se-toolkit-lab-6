@@ -338,7 +338,10 @@ Be concise and accurate. Always cite your sources."""
                 "tool_calls": tool_calls_log,
             }
 
-        # Execute tool calls
+        # Add assistant's tool call to messages FIRST
+        messages.append(response)
+
+        # Execute tool calls and add results
         for tc in tool_calls:
             function = tc.get("function", {})
             tool_name = function.get("name", "unknown")
@@ -359,16 +362,13 @@ Be concise and accurate. Always cite your sources."""
                 "result": result,
             })
 
-            # Add tool result to messages
+            # Add tool result to messages (after the assistant message)
             tool_call_id = tc.get("id", f"call_{len(tool_calls_log)}")
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call_id,
                 "content": result,
             })
-
-        # Add assistant's tool call to messages
-        messages.append(response)
 
     # Max iterations reached
     print("Max tool calls reached", file=sys.stderr)
